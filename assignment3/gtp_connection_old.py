@@ -1,12 +1,11 @@
 """
-gtp_connection_go3.py
-Example for extending a GTP engine with extra commands
+gtp_connection.py
+Module for playing games of Go using GoTextProtocol
+
+Parts of this code were originally based on the gtp module 
+in the Deep-Go project by Isaac Henrion and Amos Storkey 
+at the University of Edinburgh.
 """
-from board_base import GO_POINT
-from board import GoBoard
-from board_util import GoBoardUtil
-from simulation_engine import GoSimulationEngine
-from pattern_util import PatternUtil
 import traceback
 from sys import stdin, stdout, stderr
 from board_util import (
@@ -22,62 +21,22 @@ from board_util import (
 import numpy as np
 import re
 
-from typing import List, Tuple
-
-def sorted_point_string(points: List[GO_POINT], boardsize: int) -> str:
-    result = []
-    for point in points:
-        x, y = point_to_coord(point, boardsize)
-        result.append(format_point((x, y)))
-    return " ".join(sorted(result))
-
-def point_to_coord(point, boardsize):
-    """
-    Transform point given as board array index 
-    to (row, col) coordinate representation.
-    Special case: PASS is not transformed
-    """
-    if point == PASS:
-        return PASS
-    else:
-        NS = boardsize + 1
-        return divmod(point, NS)
-
-
-def format_point(move):
-    """
-    Return move coordinates as a string such as 'A1', or 'PASS'.
-    """
-    assert MAXSIZE <= 25
-    column_letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ"
-    if move == PASS:
-        return "PASS"
-    row, col = move
-    if not 0 <= row < MAXSIZE or not 0 <= col < MAXSIZE:
-        raise ValueError
-    return column_letters[col - 1] + str(row)
-
 
 class GtpConnection:
-    def __init__(self, go_engine: GoSimulationEngine, 
-                 board: GoBoard, debug_mode: bool = False) -> None:
+    def __init__(self, go_engine, board, debug_mode=False):
         """
-        GTP connection of GoSimulationEngine
+        Manage a GTP connection for a Go-playing engine
+
+        Parameters
+        ----------
+        go_engine:
+            a program that can reply to a set of GTP commandsbelow
+        board: 
+            Represents the current board state.
         """
         self._debug_mode = debug_mode
         self.go_engine = go_engine
         self.board = board
-        self.go_engine: GoSimulationEngine = go_engine
-        self.move_selection = ""
-        # when move_selection = "ucb", this means we have selected ucb
-        # when move_selection = "rr", this means we have selected round robin
-        self.selected_policy = ""
-        # when selected_policy = "random", this means we have selected random
-        # when selected_policy = "pattern", this means we have selected pattern
-
-        
-        # Note: this overrides the type of go_engine defined in GtpConnection.
-        # mypy seems happy with this.
         self.commands = {
             "protocol_version": self.protocol_version_cmd,
             "quit": self.quit_cmd,
@@ -95,6 +54,10 @@ class GtpConnection:
             "gogui-rules_final_result":self.gogui_rules_final_result_cmd,
             "solve":self.solve_cmd
         }
+
+        # used for argument checking
+        # values: (required number of arguments,
+        #          error message on argnum failure)
         self.argmap = {
             "boardsize": (1, "Usage: boardsize INT"),
             "komi": (1, "Usage: komi FLOAT"),
@@ -103,141 +66,7 @@ class GtpConnection:
             "play": (2, "Usage: play {b,w} MOVE"),
             "legal_moves": (1, "Usage: legal_moves {w,b}"),
         }
-        self.commands["selfatari"] = self.selfatari_cmd
-        self.commands["use_pattern"] = self.use_pattern_cmd
-        self.commands["random_simulation"] = self.random_simulation_cmd
-        self.commands["use_ucb"] = self.use_ucb_cmd
-        self.commands["num_sim"] = self.num_sim_cmd
-        self.commands["legal_moves_for_toPlay"] = self.legal_moves_for_toPlay_cmd
-        self.commands["policy_moves"] = self.policy_moves_cmd
-        self.commands["random_moves"] = self.random_moves_cmd
-        self.commands["gogui-analyze_commands"] = self.gogui_analyze_cmd
-        self.commands["policy"] = self.policy_cmd
-        self.commands["selection"] = self.selection_cmd
 
-        self.argmap["selfatari"] = (1, "Usage: selfatari BOOL")
-        self.argmap["use_pattern"] = (1, "Usage: use_pattern BOOL")
-        self.argmap["random_simulation"] = (1, "Usage: random_simulation BOOL")
-        self.argmap["use_ucb"] = (1, "Usage: use_ucb BOOL")
-        self.argmap["num_sim"] = (1, "Usage: num_sim #(e.g. num_sim 100 )")
-
-    def start_connection(self):
-        """
-        Start a GTP connection. 
-        This function continuously monitors standard input for commands.
-        """
-        line = stdin.readline()
-        while line:
-            self.get_cmd(line)
-            line = stdin.readline()
-
-    def selfatari_cmd(self, args: List[str]) -> None:
-        valid_values = [False, True]
-        value = bool(int(args[0]))
-        if value not in valid_values:
-            self.error("Argument ({}) must be True or False".format(value))
-        self.go_engine.args.check_selfatari = value
-        self.respond()
-
-    def use_pattern_cmd(self, args: List[str]) -> None:
-        valid_values = [False, True]
-        value = bool(int(args[0]))
-        if value not in valid_values:
-            self.error("Argument ({}) must be True or False".format(value))
-        self.go_engine.args.use_pattern = value
-        self.go_engine.args.random_simulation = not value
-        self.respond()
-
-    def use_ucb_cmd(self, args: List[str]) -> None:
-        valid_values = [False, True]
-        value = bool(int(args[0]))
-        if value not in valid_values:
-            self.error("Argument ({}) must be True or False".format(value))
-        self.go_engine.args.use_ucb = value
-        self.respond()
-
-    def random_simulation_cmd(self, args: List[str]) -> None:
-        valid_values = [False, True]
-        value = bool(int(args[0]))
-        if value not in valid_values:
-            self.error("Argument ({}) must be True or False".format(value))
-        self.go_engine.args.random_simulation = value
-        self.go_engine.args.use_pattern = not value
-        self.respond()
-
-    def num_sim_cmd(self, args: List[str]) -> None:
-        self.go_engine.args.sim = int(args[0])
-        self.respond()
-
-    def policy_cmd(self, args: List[str]) -> None:
-        """
-        set the associated policy
-        """
-        if args[0] == "random":
-            self.selected_policy = "random"
-            print("random policy selected")
-        elif args[0] == "pattern":
-            self.selected_policy = "pattern"
-            print("pattern policy selected")
-
-    def selection_cmd(self, args: List[str]) -> None:
-        """
-        set the associated move selection
-        """
-        if args[0] == "rr":
-            self.move_selection = "rr"
-            print("round robin move selected")
-        elif args[0] == "ucb":
-            self.move_selection = "ucb"
-            print("ucb move selected")
-
-    def policy_moves_cmd(self, args: List[str]) -> None:
-        """
-        Return list of policy moves for the current_player of the board
-        """
-        policy_moves, type_of_move = PatternUtil.generate_all_policy_moves(
-            self.board, self.go_engine.args.use_pattern, self.go_engine.args.check_selfatari
-        )
-        if len(policy_moves) == 0:
-            self.respond("Pass")
-        else:
-            response = (
-                type_of_move + " " + sorted_point_string(policy_moves, self.board.size)
-            )
-            self.respond(response)
-
-    def random_moves_cmd(self, args: List[str]) -> None:
-        """
-        Return list of random moves (legal, but not eye-filling)
-        """
-        moves = GoBoardUtil.generate_random_moves(self.board, True)
-        if len(moves) == 0:
-            self.respond("Pass")
-        else:
-            self.respond(sorted_point_string(moves, self.board.size))
-
-    def legal_moves_for_toPlay_cmd(self, args: List[str]) -> None:
-        try:
-            color = self.board.current_player
-            moves = GoBoardUtil.generate_legal_moves(self.board, color)
-            gtp_moves = []
-            for move in moves:
-                coords = point_to_coord(move, self.board.size)
-                gtp_moves.append(format_point(coords))
-            sorted_moves = " ".join(sorted(gtp_moves))
-            self.respond(sorted_moves)
-        except Exception as e:
-            self.respond("Error: {}".format(str(e)))
-
-    def gogui_analyze_cmd(self, args: List[str]) -> None:
-        try:
-            self.respond(
-                "pstring/Legal Moves For ToPlay/legal_moves_for_toPlay\n"
-                "pstring/Policy Moves/policy_moves\n"
-                "pstring/Random Moves/random_moves\n"
-            )
-        except Exception as e:
-            self.respond("Error: {}".format(str(e)))
     def write(self, data):
         stdout.write(data)
 
