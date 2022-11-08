@@ -2,41 +2,20 @@
 # /usr/bin/python3
 # Set the path to your python3 above
 
-from gtp_connection import GtpConnection
-from board_util import GoBoardUtil
-from board import GoBoard
-import numpy as np
-import argparse
-import sys
-from typing import Tuple
-
 from board_base import DEFAULT_SIZE, GO_POINT, GO_COLOR, PASS, opponent
 from board import GoBoard
 from board_score import winner
 from board_util import GoBoardUtil
+from gtp_connection_go3 import GtpConnectionGo3
 from pattern_util import PatternUtil
 from simulation_engine import GoSimulationEngine, Go3Args
 from simulation_util import writeMoves, select_best_move
 from ucb import runUcb
 
-class Go0:
-    def __init__(self):
-        """
-        NoGo player that selects moves randomly from the set of legal moves.
-
-        Parameters
-        ----------
-        name : str
-            name of the player (used by the GTP interface).
-        version : float
-            version number (used by the GTP interface).
-        """
-        self.name = "Go0"
-        self.version = 1.0
-
-    def get_move(self, board, color):
-        return GoBoardUtil.generate_random_move(board, color, 
-                                                use_eye_filter=False)
+import numpy as np
+import argparse
+import sys
+from typing import Tuple
 
 class Go3(GoSimulationEngine):
     def __init__(self, sim: int, move_select: str, sim_rule: str, 
@@ -104,7 +83,7 @@ class Go3(GoSimulationEngine):
                 break
         return winner(board, self.komi)
 
-def parse_args() -> "tuple[int, str, str, bool]":
+def parse_args() -> Tuple[int, str, str, bool]:
     """
     Parse the arguments of the program.
     """
@@ -157,11 +136,9 @@ def run(sim: int, move_select: str, sim_rule: str, check_selfatari: bool) -> Non
     """
     board = GoBoard(DEFAULT_SIZE)
     engine: Go3 = Go3(sim, move_select, sim_rule, check_selfatari)
-    con = GtpConnection(engine, board)
+    con = GtpConnectionGo3(engine, board)
     con.start_connection()
 
 if __name__ == "__main__":
     sim, move_select, sim_rule, check_selfatari = parse_args()
     run(sim, move_select, sim_rule, check_selfatari)
-
-
